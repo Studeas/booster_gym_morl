@@ -1,4 +1,8 @@
 import os
+
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import glob
 import yaml
 import argparse
@@ -11,7 +15,7 @@ import torch
 import torch.nn.functional as F
 from utils.model import *
 from utils.buffer import ExperienceBuffer
-from utils.utils import discount_values, surrogate_loss
+from utils.utils import discount_values, surrogate_loss, sample_dirichlet_weights
 from utils.recorder import Recorder
 from envs import *
 
@@ -27,13 +31,19 @@ class Runner:
         task_class = eval(self.cfg["basic"]["task"])
         self.env = task_class(self.cfg)
 
-        self.device = self.cfg["basic"]["rl_device"]
+        self.device = self.cfg["basic"]["rl_device"] 
         self.learning_rate = self.cfg["algorithm"]["learning_rate"]
-        self.model = ActorCritic(self.env.num_actions, self.env.num_obs, self.env.num_privileged_obs).to(self.device)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
+        self.model = ActorCritic(
+            self.env.num_actions, self.env.num_obs, self.env.num_privileged_obs
+        ).to(self.device)
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(), lr=self.learning_rate
+        )
         self._load()
 
-        self.buffer = ExperienceBuffer(self.cfg["runner"]["horizon_length"], self.env.num_envs, self.device)
+        self.buffer = ExperienceBuffer(
+            self.cfg["runner"]["horizon_length"], self.env.num_envs, self.device
+        )
         self.buffer.add_buffer("actions", (self.env.num_actions,))
         self.buffer.add_buffer("obses", (self.env.num_obs,))
         self.buffer.add_buffer("privileged_obses", (self.env.num_privileged_obs,))
@@ -43,14 +53,42 @@ class Runner:
 
     def _get_args(self):
         parser = argparse.ArgumentParser()
-        parser.add_argument("--task", required=True, type=str, help="Name of the task to run.")
-        parser.add_argument("--checkpoint", type=str, help="Path of the model checkpoint to load. Overrides config file if provided.")
-        parser.add_argument("--num_envs", type=int, help="Number of environments to create. Overrides config file if provided.")
-        parser.add_argument("--headless", type=bool, help="Run headless without creating a viewer window. Overrides config file if provided.")
-        parser.add_argument("--sim_device", type=str, help="Device for physics simulation. Overrides config file if provided.")
-        parser.add_argument("--rl_device", type=str, help="Device for the RL algorithm. Overrides config file if provided.")
-        parser.add_argument("--seed", type=int, help="Random seed. Overrides config file if provided.")
-        parser.add_argument("--max_iterations", type=int, help="Maximum number of training iterations. Overrides config file if provided.")
+        parser.add_argument(
+            "--task", required=True, type=str, help="Name of the task to run."
+        )
+        parser.add_argument(
+            "--checkpoint",
+            type=str,
+            help="Path of the model checkpoint to load. Overrides config file if provided.",
+        )
+        parser.add_argument(
+            "--num_envs",
+            type=int,
+            help="Number of environments to create. Overrides config file if provided.",
+        )
+        parser.add_argument(
+            "--headless",
+            type=bool,
+            help="Run headless without creating a viewer window. Overrides config file if provided.",
+        )
+        parser.add_argument(
+            "--sim_device",
+            type=str,
+            help="Device for physics simulation. Overrides config file if provided.",
+        )
+        parser.add_argument(
+            "--rl_device",
+            type=str,
+            help="Device for the RL algorithm. Overrides config file if provided.",
+        )
+        parser.add_argument(
+            "--seed", type=int, help="Random seed. Overrides config file if provided."
+        )
+        parser.add_argument(
+            "--max_iterations",
+            type=int,
+            help="Maximum number of training iterations. Overrides config file if provided.",
+        )
         self.args = parser.parse_args()
 
     # Override config file with args if needed
@@ -82,10 +120,17 @@ class Runner:
     def _load(self):
         if not self.cfg["basic"]["checkpoint"]:
             return
-        if (self.cfg["basic"]["checkpoint"] == "-1") or (self.cfg["basic"]["checkpoint"] == -1):
-            self.cfg["basic"]["checkpoint"] = sorted(glob.glob(os.path.join("logs", "**/*.pth"), recursive=True), key=os.path.getmtime)[-1]
+        if (self.cfg["basic"]["checkpoint"] == "-1") or (
+            self.cfg["basic"]["checkpoint"] == -1
+        ):
+            self.cfg["basic"]["checkpoint"] = sorted(
+                glob.glob(os.path.join("logs", "**/*.pth"), recursive=True),
+                key=os.path.getmtime,
+            )[-1]
         print("Loading model from {}".format(self.cfg["basic"]["checkpoint"]))
-        model_dict = torch.load(self.cfg["basic"]["checkpoint"], map_location=self.device, weights_only=True)
+        model_dict = torch.load(
+            self.cfg["basic"]["checkpoint"], map_location=self.device, weights_only=True
+        )
         self.model.load_state_dict(model_dict["model"], strict=False)
         try:
             self.env.curriculum_prob = model_dict["curriculum"]
@@ -98,9 +143,15 @@ class Runner:
 
     def train(self):
         self.recorder = Recorder(self.cfg)
+
         obs, infos = self.env.reset()
         obs = obs.to(self.device)
         privileged_obs = infos["privileged_obs"].to(self.device)
+
+        # #TODO add weights sampling process
+        # sampled_weights = sample_dirichlet_weights(self.env.num_envs, num_groups=6)
+        # self.env._weights_per_env = sampled_weights
+
         for it in range(self.cfg["basic"]["max_iterations"]):
             # within horizon_length, env.step() is called with same act
             for n in range(self.cfg["runner"]["horizon_length"]):
@@ -109,30 +160,44 @@ class Runner:
                 with torch.no_grad():
                     dist = self.model.act(obs)
                     act = dist.sample()
-                obs, rew, done, infos = self.env.step(act)
-                obs, rew, done = obs.to(self.device), rew.to(self.device), done.to(self.device)
+                obs, rew, done, infos = self.env.step(act) # step execution
+                obs, rew, done = (
+                    obs.to(self.device),
+                    rew.to(self.device),
+                    done.to(self.device),
+                )
                 privileged_obs = infos["privileged_obs"].to(self.device)
                 self.buffer.update_data("actions", n, act)
                 self.buffer.update_data("rewards", n, rew)
                 self.buffer.update_data("dones", n, done)
-                self.buffer.update_data("time_outs", n, infos["time_outs"].to(self.device))
+                self.buffer.update_data(
+                    "time_outs", n, infos["time_outs"].to(self.device)
+                )
                 ep_info = {"reward": rew}
                 ep_info.update(infos["rew_terms"])
-                self.recorder.record_episode_statistics(done, ep_info, it, n == (self.cfg["runner"]["horizon_length"] - 1))
+                self.recorder.record_episode_statistics(
+                    done, ep_info, it, n == (self.cfg["runner"]["horizon_length"] - 1)
+                )
 
             with torch.no_grad():
                 old_dist = self.model.act(self.buffer["obses"])
-                old_actions_log_prob = old_dist.log_prob(self.buffer["actions"]).sum(dim=-1)
+                old_actions_log_prob = old_dist.log_prob(self.buffer["actions"]).sum(
+                    dim=-1
+                )
 
             mean_value_loss = 0
             mean_actor_loss = 0
             mean_bound_loss = 0
             mean_entropy = 0
             for n in range(self.cfg["runner"]["mini_epochs"]):
-                values = self.model.est_value(self.buffer["obses"], self.buffer["privileged_obses"])
+                values = self.model.est_value(
+                    self.buffer["obses"], self.buffer["privileged_obses"]
+                )
                 last_values = self.model.est_value(obs, privileged_obs)
                 with torch.no_grad():
-                    self.buffer["rewards"][self.buffer["time_outs"]] = values[self.buffer["time_outs"]]
+                    self.buffer["rewards"][self.buffer["time_outs"]] = values[
+                        self.buffer["time_outs"]
+                    ]
                     advantages = discount_values(
                         self.buffer["rewards"],
                         self.buffer["dones"] | self.buffer["time_outs"],
@@ -142,14 +207,21 @@ class Runner:
                         self.cfg["algorithm"]["lam"],
                     )
                     returns = values + advantages
-                    advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+                    advantages = (advantages - advantages.mean()) / (
+                        advantages.std() + 1e-8
+                    )
                 value_loss = F.mse_loss(values, returns)
 
                 dist = self.model.act(self.buffer["obses"])
                 actions_log_prob = dist.log_prob(self.buffer["actions"]).sum(dim=-1)
-                actor_loss = surrogate_loss(old_actions_log_prob, actions_log_prob, advantages)
+                actor_loss = surrogate_loss(
+                    old_actions_log_prob, actions_log_prob, advantages
+                )
 
-                bound_loss = torch.clip(dist.loc - 1.0, min=0.0).square().mean() + torch.clip(dist.loc + 1.0, max=0.0).square().mean()
+                bound_loss = (
+                    torch.clip(dist.loc - 1.0, min=0.0).square().mean()
+                    + torch.clip(dist.loc + 1.0, max=0.0).square().mean()
+                )
 
                 entropy = dist.entropy().sum(dim=-1)
 
@@ -169,7 +241,7 @@ class Runner:
                         torch.log(dist.scale / old_dist.scale)
                         + 0.5 * (torch.square(old_dist.scale) + torch.square(dist.loc - old_dist.loc)) / torch.square(dist.scale)
                         - 0.5,
-                        axis=-1,
+                        dim=-1, #TODO modified: axis --> dim
                     )
                     kl_mean = torch.mean(kl)
                     if kl_mean > self.cfg["algorithm"]["desired_kl"] * 2:
@@ -215,7 +287,10 @@ class Runner:
             print("epoch: {}/{}".format(it + 1, self.cfg["basic"]["max_iterations"]))
 
     def play(self):
-        obs, infos = self.env.reset()
+        obs, infos = self.env.reset() 
+        #TODO here within reset() we do a random resampling of weights,
+        # afterwards we can take resampling out of reset and replace it with a high level weights planner
+
         obs = obs.to(self.device)
         if self.cfg["viewer"]["record_video"]:
             os.makedirs("videos", exist_ok=True)
@@ -226,14 +301,20 @@ class Runner:
                 dist = self.model.act(obs)
                 act = dist.loc
                 obs, rew, done, infos = self.env.step(act)
-                obs, rew, done = obs.to(self.device), rew.to(self.device), done.to(self.device)
+                obs, rew, done = (
+                    obs.to(self.device),
+                    rew.to(self.device),
+                    done.to(self.device),
+                )
             if self.cfg["viewer"]["record_video"]:
                 record_time -= self.env.dt
                 if record_time < 0:
                     record_time += self.cfg["viewer"]["record_interval"]
                     self.interrupt = False
                     signal.signal(signal.SIGINT, self.interrupt_handler)
-                    with imageio.get_writer(os.path.join("videos", name), fps=int(1.0 / self.env.dt)) as self.writer:
+                    with imageio.get_writer(
+                        os.path.join("videos", name), fps=int(1.0 / self.env.dt)
+                    ) as self.writer:
                         for frame in self.env.camera_frames:
                             self.writer.append_data(frame)
                     if self.interrupt:
@@ -243,3 +324,10 @@ class Runner:
     def interrupt_handler(self, signal, frame):
         print("\nInterrupt received, waiting for video to finish...")
         self.interrupt = True
+
+
+if __name__ == "__main__":
+    runner = Runner()
+
+
+    

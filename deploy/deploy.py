@@ -74,8 +74,15 @@ class Controller:
             raise
 
     def _low_state_handler(self, low_state_msg: LowState):
-        if abs(low_state_msg.imu_state.rpy[0]) > 1.0 or abs(low_state_msg.imu_state.rpy[1]) > 1.0:
-            self.logger.warning("IMU base rpy values are too large: {}".format(low_state_msg.imu_state.rpy))
+        if (
+            abs(low_state_msg.imu_state.rpy[0]) > 1.0
+            or abs(low_state_msg.imu_state.rpy[1]) > 1.0
+        ):
+            self.logger.warning(
+                "IMU base rpy values are too large: {}".format(
+                    low_state_msg.imu_state.rpy
+                )
+            )
             self.running = False
         self.timer.tick_timer_if_sim()
         time_now = self.timer.get_time()
@@ -173,7 +180,9 @@ class Controller:
             self.next_publish_time += self.cfg["common"]["dt"]
             self.logger.debug(f"Next publish time: {self.next_publish_time}")
 
-            self.filtered_dof_target = self.filtered_dof_target * 0.8 + self.dof_target * 0.2
+            self.filtered_dof_target = (
+                self.filtered_dof_target * 0.8 + self.dof_target * 0.2
+            )
 
             for i in range(B1JointCnt):
                 self.low_cmd.motor_cmd[i].q = self.filtered_dof_target[i]
@@ -182,7 +191,8 @@ class Controller:
             for i in self.cfg["mech"]["parallel_mech_indexes"]:
                 self.low_cmd.motor_cmd[i].q = self.dof_pos_latest[i]
                 self.low_cmd.motor_cmd[i].tau = np.clip(
-                    (self.filtered_dof_target[i] - self.dof_pos_latest[i]) * self.cfg["common"]["stiffness"][i],
+                    (self.filtered_dof_target[i] - self.dof_pos_latest[i])
+                    * self.cfg["common"]["stiffness"][i],
                     -self.cfg["common"]["torque_limit"][i],
                     self.cfg["common"]["torque_limit"][i],
                 )
@@ -214,8 +224,15 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT, signal_handler)
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True, type=str, help="Name of the configuration file.")
-    parser.add_argument("--net", type=str, default="127.0.0.1", help="Network interface for SDK communication.")
+    parser.add_argument(
+        "--config", required=True, type=str, help="Name of the configuration file."
+    )
+    parser.add_argument(
+        "--net",
+        type=str,
+        default="127.0.0.1",
+        help="Network interface for SDK communication.",
+    )
     args = parser.parse_args()
     cfg_file = os.path.join("configs", args.config)
 

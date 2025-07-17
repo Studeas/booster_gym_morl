@@ -10,7 +10,9 @@ class ExperienceBuffer:
         self.device = device
 
     def add_buffer(self, name, shape, dtype=None):
-        self.tensor_dict[name] = torch.zeros(self.horizon_length, self.num_envs, *shape, dtype=dtype, device=self.device)
+        self.tensor_dict[name] = torch.zeros(
+            self.horizon_length, self.num_envs, *shape, dtype=dtype, device=self.device
+        )
 
     def update_data(self, name, idx, data):
         self.tensor_dict[name][idx, :] = data

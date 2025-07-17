@@ -28,17 +28,24 @@ class Terrain:
         self.gym.add_ground(self.sim, plane_params)
 
     def _create_trimesh(self):
-        self.env_width = self.terrain_cfg["num_terrains"] * self.terrain_cfg["terrain_width"]
+        self.env_width = (
+            self.terrain_cfg["num_terrains"] * self.terrain_cfg["terrain_width"]
+        )
         self.env_length = self.terrain_cfg["terrain_length"]
         self.border_size = self.terrain_cfg["border_size"]
         self.horizontal_scale = self.terrain_cfg["horizontal_scale"]
         self.vertical_scale = self.terrain_cfg["vertical_scale"]
         self.border_pixels = int(self.border_size / self.horizontal_scale)
-        terrain_width_pixels = int(self.terrain_cfg["terrain_width"] / self.horizontal_scale)
-        terrain_length_pixels = int(self.terrain_cfg["terrain_length"] / self.horizontal_scale)
+        terrain_width_pixels = int(
+            self.terrain_cfg["terrain_width"] / self.horizontal_scale
+        )
+        terrain_length_pixels = int(
+            self.terrain_cfg["terrain_length"] / self.horizontal_scale
+        )
         self.height_field_raw = np.zeros(
             (
-                self.terrain_cfg["num_terrains"] * terrain_width_pixels + 2 * self.border_pixels,
+                self.terrain_cfg["num_terrains"] * terrain_width_pixels
+                + 2 * self.border_pixels,
                 terrain_length_pixels + 2 * self.border_pixels,
             ),
             dtype=np.int16,
@@ -60,7 +67,9 @@ class Terrain:
             if i < proportions[0]:
                 pass
             elif i < proportions[1]:
-                terrain_utils.pyramid_sloped_terrain(terrain, slope=self.terrain_cfg["slope"], platform_size=3.0)
+                terrain_utils.pyramid_sloped_terrain(
+                    terrain, slope=self.terrain_cfg["slope"], platform_size=3.0
+                )
             elif i < proportions[2]:
                 terrain_utils.random_uniform_terrain(
                     terrain,
@@ -82,9 +91,14 @@ class Terrain:
             end_x = self.border_pixels + (i + 1) * terrain_width_pixels
             start_y = self.border_pixels
             end_y = self.border_pixels + terrain_length_pixels
-            self.height_field_raw[start_x:end_x, start_y:end_y] = terrain.height_field_raw
+            self.height_field_raw[start_x:end_x, start_y:end_y] = (
+                terrain.height_field_raw
+            )
         vertices, triangles = terrain_utils.convert_heightfield_to_trimesh(
-            self.height_field_raw, self.horizontal_scale, self.vertical_scale, self.terrain_cfg["slope_threshold"]
+            self.height_field_raw,
+            self.horizontal_scale,
+            self.vertical_scale,
+            self.terrain_cfg["slope_threshold"],
         )
 
         tm_params = gymapi.TriangleMeshParams()
@@ -96,14 +110,25 @@ class Terrain:
         tm_params.static_friction = self.terrain_cfg["static_friction"]
         tm_params.dynamic_friction = self.terrain_cfg["dynamic_friction"]
         tm_params.restitution = self.terrain_cfg["restitution"]
-        self.gym.add_triangle_mesh(self.sim, vertices.flatten(order="C"), triangles.flatten(order="C"), tm_params)
+        self.gym.add_triangle_mesh(
+            self.sim,
+            vertices.flatten(order="C"),
+            triangles.flatten(order="C"),
+            tm_params,
+        )
 
     def terrain_heights(self, base_pos):
         if self.type == "plane":
             return torch.zeros(len(base_pos), dtype=torch.float, device=self.device)
         else:
-            x = self.border_pixels + base_pos[:, 0].cpu().numpy() / self.horizontal_scale
-            y = self.border_pixels + base_pos[:, 1].cpu().numpy() / self.horizontal_scale
+            x = (
+                self.border_pixels
+                + base_pos[:, 0].cpu().numpy() / self.horizontal_scale
+            )
+            y = (
+                self.border_pixels
+                + base_pos[:, 1].cpu().numpy() / self.horizontal_scale
+            )
             x1 = np.floor(x).astype(int)
             x2 = x1 + 1
             y1 = np.floor(y).astype(int)

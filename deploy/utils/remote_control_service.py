@@ -69,7 +69,9 @@ class RemoteControlService:
         self.keyboard_start_rl_gait = False
 
     def _start_keyboard_thread(self):
-        self.keyboard_runner = threading.Thread(target=listen_keyboard, args=(self._handle_keyboard_press,))
+        self.keyboard_runner = threading.Thread(
+            target=listen_keyboard, args=(self._handle_keyboard_press,)
+        )
         self.keyboard_runner.daemon = True
         self.keyboard_runner.start()
 
@@ -130,7 +132,14 @@ class RemoteControlService:
                     abs_info = caps.get(evdev.ecodes.EV_ABS, [])
                     # Look for typical gamepad axes
                     axes = [code for (code, info) in abs_info]
-                    if all(code in axes for code in [self.config.x_axis, self.config.y_axis, self.config.yaw_axis]):
+                    if all(
+                        code in axes
+                        for code in [
+                            self.config.x_axis,
+                            self.config.y_axis,
+                            self.config.yaw_axis,
+                        ]
+                    ):
                         absinfo = {}
                         for code, info in abs_info:
                             absinfo[code] = info
@@ -188,18 +197,26 @@ class RemoteControlService:
         try:
             """Handle axis events."""
             if code == self.config.x_axis:
-                self.vx = self._scale(value, self.config.max_vx, self.config.control_threshold, code)
+                self.vx = self._scale(
+                    value, self.config.max_vx, self.config.control_threshold, code
+                )
                 # print("value x:", self.vx)
             elif code == self.config.y_axis:
-                self.vy = self._scale(value, self.config.max_vy, self.config.control_threshold, code)
+                self.vy = self._scale(
+                    value, self.config.max_vy, self.config.control_threshold, code
+                )
                 # print("value y:", self.vy)
             elif code == self.config.yaw_axis:
-                self.vyaw = self._scale(value, self.config.max_vyaw, self.config.control_threshold, code)
+                self.vyaw = self._scale(
+                    value, self.config.max_vyaw, self.config.control_threshold, code
+                )
                 # print("value yaw:", self.vyaw)
         except Exception:
             raise
 
-    def _scale(self, value: float, max: float, threshold: float, axis_code: int) -> float:
+    def _scale(
+        self, value: float, max: float, threshold: float, axis_code: int
+    ) -> float:
         """Scale joystick input to velocity command using actual axis ranges."""
         absinfo = self.axis_ranges[axis_code]
         min_in = absinfo.min
@@ -232,9 +249,15 @@ class RemoteControlService:
         self._running = False
         if hasattr(self, "joystick") and getattr(self, "joystick") != None:
             self.joystick.close()
-        if hasattr(self, "joystick_runner") and getattr(self, "joystick_runner") != None:
+        if (
+            hasattr(self, "joystick_runner")
+            and getattr(self, "joystick_runner") != None
+        ):
             self.joystick_runner.join(timeout=1.0)
-        if hasattr(self, "keyboard_runner") and getattr(self, "keyboard_runner") != None:
+        if (
+            hasattr(self, "keyboard_runner")
+            and getattr(self, "keyboard_runner") != None
+        ):
             self.keyboard_runner.join(timeout=1.0)
 
     def __enter__(self):

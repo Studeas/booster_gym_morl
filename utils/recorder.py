@@ -1,8 +1,9 @@
 import torch
-from torch.utils.tensorboard import SummaryWriter
+from torch.utils.tensorboard.writer import SummaryWriter
 import os
 import time
-import wandb
+# import wandb
+import swanlab as wandb
 import yaml
 
 

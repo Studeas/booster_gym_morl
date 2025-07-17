@@ -8,14 +8,24 @@ def apply_randomization(tensor, params, return_noise=False):
 
     if params["distribution"] == "gaussian":
         mu, var = params["range"]
-        noise = torch.randn_like(tensor) if isinstance(tensor, torch.Tensor) else np.random.randn()
+        noise = (
+            torch.randn_like(tensor)
+            if isinstance(tensor, torch.Tensor)
+            else np.random.randn()
+        )
         noise_val = mu + var * noise
     elif params["distribution"] == "uniform":
         lower, upper = params["range"]
-        noise = torch.rand_like(tensor) if isinstance(tensor, torch.Tensor) else np.random.rand()
+        noise = (
+            torch.rand_like(tensor)
+            if isinstance(tensor, torch.Tensor)
+            else np.random.rand()
+        )
         noise_val = lower + (upper - lower) * noise
     else:
-        raise ValueError(f"Invalid randomization distribution: {params['distribution']}")
+        raise ValueError(
+            f"Invalid randomization distribution: {params['distribution']}"
+        )
 
     if params["operation"] == "additive":
         result = tensor + noise_val
@@ -40,7 +50,9 @@ def discount_values(rewards, dones, values, last_values, gamma, lam):
         else:
             next_values = values[t + 1, :]
         delta = rewards[t, :] + gamma * next_nonterminal * next_values - values[t, :]
-        advantages[t, :] = last_advantage = delta + gamma * lam * next_nonterminal * last_advantage
+        advantages[t, :] = last_advantage = (
+            delta + gamma * lam * next_nonterminal * last_advantage
+        )
     return advantages
 
 
@@ -50,3 +62,10 @@ def surrogate_loss(old_actions_log_prob, actions_log_prob, advantages, e_clip=0.
     surrogate_clipped = -advantages * torch.clamp(ratio, 1.0 - e_clip, 1.0 + e_clip)
     surrogate_loss = torch.max(surrogate, surrogate_clipped).mean()
     return surrogate_loss
+
+def sample_dirichlet_weights(num_envs: int, num_groups: int, alpha: float = 1.0):
+    return np.random.dirichlet([alpha] * num_groups, size=num_envs)
+
+
+# m = sample_dirichlet_weights(2,6)
+# print(m)

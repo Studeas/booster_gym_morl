@@ -21,8 +21,14 @@ def quat_rotate_inverse(q, v):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--task", required=True, type=str, help="Name of the task to run.")
-    parser.add_argument("--checkpoint", type=str, help="Path of model checkpoint to load. Overrides config file if provided.")
+    parser.add_argument(
+        "--task", required=True, type=str, help="Name of the task to run."
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        help="Path of model checkpoint to load. Overrides config file if provided.",
+    )
     args = parser.parse_args()
     cfg_file = os.path.join("envs", "{}.yaml".format(args.task))
     with open(cfg_file, "r", encoding="utf-8") as f:
@@ -30,11 +36,24 @@ if __name__ == "__main__":
     if args.checkpoint is not None:
         cfg["basic"]["checkpoint"] = args.checkpoint
 
-    model = ActorCritic(cfg["env"]["num_actions"], cfg["env"]["num_observations"], cfg["env"]["num_privileged_obs"])
-    if not cfg["basic"]["checkpoint"] or (cfg["basic"]["checkpoint"] == "-1") or (cfg["basic"]["checkpoint"] == -1):
-        cfg["basic"]["checkpoint"] = sorted(glob.glob(os.path.join("logs", "**/*.pth"), recursive=True), key=os.path.getmtime)[-1]
+    model = ActorCritic(
+        cfg["env"]["num_actions"],
+        cfg["env"]["num_observations"],
+        cfg["env"]["num_privileged_obs"],
+    )
+    if (
+        not cfg["basic"]["checkpoint"]
+        or (cfg["basic"]["checkpoint"] == "-1")
+        or (cfg["basic"]["checkpoint"] == -1)
+    ):
+        cfg["basic"]["checkpoint"] = sorted(
+            glob.glob(os.path.join("logs", "**/*.pth"), recursive=True),
+            key=os.path.getmtime,
+        )[-1]
     print("Loading model from {}".format(cfg["basic"]["checkpoint"]))
-    model_dict = torch.load(cfg["basic"]["checkpoint"], map_location="cpu", weights_only=True)
+    model_dict = torch.load(
+        cfg["basic"]["checkpoint"], map_location="cpu", weights_only=True
+    )
     model.load_state_dict(model_dict["model"])
 
     mj_model = mujoco.MjModel.from_xml_path(cfg["asset"]["mujoco_file"])
@@ -60,11 +79,16 @@ if __name__ == "__main__":
                 dof_damping[i] = cfg["control"]["damping"][name]
                 found = True
         if not found:
-            raise ValueError(f"PD gain of joint {mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)} were not defined")
+            raise ValueError(
+                f"PD gain of joint {mujoco.mj_id2name(mj_model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)} were not defined"
+            )
     mj_data.qpos = np.concatenate(
         [
             np.array(cfg["init_state"]["pos"], dtype=np.float32),
-            np.array(cfg["init_state"]["rot"][3:4] + cfg["init_state"]["rot"][0:3], dtype=np.float32),
+            np.array(
+                cfg["init_state"]["rot"][3:4] + cfg["init_state"]["rot"][0:3],
+                dtype=np.float32,
+            ),
             default_dof_pos,
         ]
     )
@@ -88,7 +112,9 @@ if __name__ == "__main__":
                         if lin_vel_x == 0 and lin_vel_y == 0 and ang_vel_yaw == 0:
                             gait_frequency = 0
                         else:
-                            gait_frequency = np.average(cfg["commands"]["gait_frequency"])
+                            gait_frequency = np.average(
+                                cfg["commands"]["gait_frequency"]
+                            )
                         print(
                             f"Updated command to: x={lin_vel_x}, y={lin_vel_y}, yaw={ang_vel_yaw}\nSet command (x, y, yaw): ",
                             end="",
@@ -96,7 +122,10 @@ if __name__ == "__main__":
                     else:
                         raise ValueError
                 except ValueError:
-                    print("Invalid input. Enter three numeric values.\nSet command (x, y, yaw): ", end="")
+                    print(
+                        "Invalid input. Enter three numeric values.\nSet command (x, y, yaw): ",
+                        end="",
+                    )
             dof_pos = mj_data.qpos.astype(np.float32)[7:]
             dof_vel = mj_data.qvel.astype(np.float32)[6:]
             quat = mj_data.sensor("orientation").data[[1, 2, 3, 0]].astype(np.float32)
@@ -111,13 +140,21 @@ if __name__ == "__main__":
                 obs[8] = ang_vel_yaw * cfg["normalization"]["ang_vel"]
                 obs[9] = np.cos(2 * np.pi * gait_process) * (gait_frequency > 1.0e-8)
                 obs[10] = np.sin(2 * np.pi * gait_process) * (gait_frequency > 1.0e-8)
-                obs[11:23] = (dof_pos - default_dof_pos) * cfg["normalization"]["dof_pos"]
+                obs[11:23] = (dof_pos - default_dof_pos) * cfg["normalization"][
+                    "dof_pos"
+                ]
                 obs[23:35] = dof_vel * cfg["normalization"]["dof_vel"]
                 obs[35:47] = actions
                 dist = model.act(torch.tensor(obs).unsqueeze(0))
                 actions[:] = dist.loc.detach().numpy()
-                actions[:] = np.clip(actions, -cfg["normalization"]["clip_actions"], cfg["normalization"]["clip_actions"])
-                dof_targets[:] = default_dof_pos + cfg["control"]["action_scale"] * actions
+                actions[:] = np.clip(
+                    actions,
+                    -cfg["normalization"]["clip_actions"],
+                    cfg["normalization"]["clip_actions"],
+                )
+                dof_targets[:] = (
+                    default_dof_pos + cfg["control"]["action_scale"] * actions
+                )
             mj_data.ctrl = np.clip(
                 dof_stiffness * (dof_targets - dof_pos) - dof_damping * dof_vel,
                 mj_model.actuator_ctrlrange[:, 0],
@@ -127,4 +164,6 @@ if __name__ == "__main__":
             viewer.cam.lookat[:] = mj_data.qpos.astype(np.float32)[0:3]
             viewer.sync()
             it += 1
-            gait_process = np.fmod(gait_process + cfg["sim"]["dt"] * gait_frequency, 1.0)
+            gait_process = np.fmod(
+                gait_process + cfg["sim"]["dt"] * gait_frequency, 1.0
+            )
