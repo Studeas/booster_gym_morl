@@ -66,6 +66,17 @@ def surrogate_loss(old_actions_log_prob, actions_log_prob, advantages, e_clip=0.
 def sample_dirichlet_weights(num_envs: int, num_groups: int, alpha: float = 1.0):
     return np.random.dirichlet([alpha] * num_groups, size=num_envs)
 
+def get_valid_single_weight(user_w, center_w): # torch Tensor
+    """
+    return the hadamard product of user_w and center_w divided by the dot product of them.
+    allow user to input any vector to adjust the reletive values for each reward group.
+    """
+    assert user_w.size(0) == center_w.size(0) 
+    return torch.mul(user_w, center_w) / torch.dot(user_w, center_w)
+
+
+
+
 
 # m = sample_dirichlet_weights(2,6)
 # print(m)

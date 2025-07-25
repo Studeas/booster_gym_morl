@@ -1,5 +1,5 @@
 # reward groups for MOPPO
-
+import torch
 
 REWARD_GROUP_INDEX = {
     "survival": 0,
@@ -64,3 +64,11 @@ REWARD_TO_GROUP = get_reward_to_group_index()
 
 # reverse table: index --> name
 GROUP_INDEX_TO_NAME = {v: k for k, v in REWARD_GROUP_INDEX.items()}
+
+N_ALL = 26
+GROUP_SIZES = torch.tensor([1, 5, 3, 6, 3, 8], dtype=torch.float32)
+GROUP_SCALE = N_ALL / GROUP_SIZES
+
+# 上调采样更集中 下调采样更分散
+DIRICHLET_ALPHA_BASE = 0.1
+DIRICHLET_ALPHA = DIRICHLET_ALPHA_BASE * GROUP_SIZES

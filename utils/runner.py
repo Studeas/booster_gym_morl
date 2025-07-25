@@ -1,6 +1,8 @@
 import os
 
 import sys
+
+from sympy.logic import false
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import glob
@@ -28,13 +30,17 @@ class Runner:
         self._get_args()
         self._update_cfg_from_args()
         self._set_seed()
-        task_class = eval(self.cfg["basic"]["task"])
-        self.env = task_class(self.cfg)
+        task_class = eval(self.cfg["basic"]["task"]) # this line is used to load the task class from the config file
+        self.env = task_class(self.cfg) # this line is used to create the environment
+
 
         self.device = self.cfg["basic"]["rl_device"] 
         self.learning_rate = self.cfg["algorithm"]["learning_rate"]
         self.model = ActorCritic(
-            self.env.num_actions, self.env.num_obs, self.env.num_privileged_obs
+            self.env.num_actions, 
+            self.env.num_obs, 
+            self.env.num_privileged_obs,
+            self.env.num_groups # new
         ).to(self.device)
         self.optimizer = torch.optim.Adam(
             self.model.parameters(), lr=self.learning_rate
@@ -175,6 +181,11 @@ class Runner:
                 )
                 ep_info = {"reward": rew}
                 ep_info.update(infos["rew_terms"])
+
+                # if it % 50 == 0:     # 每 50 个 iter 打一次
+                #     term_mean = {k: v.mean().item() for k, v in ep_info.items() if k != "reward"}
+                #     print(f"[iter {it}] term_mean:", term_mean)
+                    
                 self.recorder.record_episode_statistics(
                     done, ep_info, it, n == (self.cfg["runner"]["horizon_length"] - 1)
                 )
@@ -225,11 +236,16 @@ class Runner:
 
                 entropy = dist.entropy().sum(dim=-1)
 
+                # for entropy coef decay
+                frac = min(1.0, it / self.cfg["algorithm"]["entropy_coef_decay_iters"])
+                cur_coef = (1-frac) * self.cfg["algorithm"]["entropy_coef_start"] \
+                            + frac   * self.cfg["algorithm"]["entropy_coef_end"]
+
                 loss = (
                     value_loss
                     + actor_loss
                     + self.cfg["algorithm"]["bound_coef"] * bound_loss
-                    + self.cfg["algorithm"]["entropy_coef"] * entropy.mean()
+                    + cur_coef * entropy.mean()
                 )
                 self.optimizer.zero_grad()
                 loss.backward()
@@ -287,6 +303,7 @@ class Runner:
             print("epoch: {}/{}".format(it + 1, self.cfg["basic"]["max_iterations"]))
 
     def play(self):
+        self.env.playmode = True
         obs, infos = self.env.reset() 
         #TODO here within reset() we do a random resampling of weights,
         # afterwards we can take resampling out of reset and replace it with a high level weights planner
@@ -320,6 +337,52 @@ class Runner:
                     if self.interrupt:
                         raise KeyboardInterrupt
                     signal.signal(signal.SIGINT, signal.default_int_handler)
+
+
+    def play_with_weights(self):
+        self.env.playmode = True
+        self.env.random_play = False
+        print(f"set self.random_play to {self.env.random_play}")
+        obs, infos = self.env.reset() 
+
+        obs = obs.to(self.device)
+        if self.cfg["viewer"]["record_video"]:
+            os.makedirs("videos", exist_ok=True)
+            name = time.strftime("%Y-%m-%d-%H-%M-%S.mp4", time.localtime())
+            record_time = self.cfg["viewer"]["record_interval"]
+        while True:
+            with torch.no_grad():
+                dist = self.model.act(obs)
+                act = dist.loc
+                obs, rew, done, infos = self.env.step(act)
+                obs, rew, done = (
+                    obs.to(self.device),
+                    rew.to(self.device),
+                    done.to(self.device),
+                )
+            if self.cfg["viewer"]["record_video"]:
+                record_time -= self.env.dt
+                if record_time < 0:
+                    record_time += self.cfg["viewer"]["record_interval"]
+                    self.interrupt = False
+                    signal.signal(signal.SIGINT, self.interrupt_handler)
+                    with imageio.get_writer(
+                        os.path.join("videos", name), fps=int(1.0 / self.env.dt)
+                    ) as self.writer:
+                        for frame in self.env.camera_frames:
+                            self.writer.append_data(frame)
+                    if self.interrupt:
+                        raise KeyboardInterrupt
+                    signal.signal(signal.SIGINT, signal.default_int_handler)
+
+
+
+
+
+
+
+
+
 
     def interrupt_handler(self, signal, frame):
         print("\nInterrupt received, waiting for video to finish...")

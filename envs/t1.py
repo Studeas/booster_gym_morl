@@ -18,9 +18,10 @@ import torch
 import numpy as np
 from .base_task import BaseTask
 
-from utils.utils import apply_randomization, sample_dirichlet_weights
+from utils.utils import apply_randomization, get_valid_single_weight
+# from utils.weights import get_weights 
 
-from envs.reward_groups import REWARD_TO_GROUP
+from envs.reward_groups import REWARD_TO_GROUP, GROUP_SIZES, GROUP_SCALE, DIRICHLET_ALPHA
 
 
 class T1(BaseTask):
@@ -29,17 +30,25 @@ class T1(BaseTask):
         super().__init__(cfg)
         self._create_envs()
         self.gym.prepare_sim(self.sim)
-        self._init_buffers()
-        self.num_obs += 6 # add addtional weights as input
+        self.playmode = False
+        self.random_play = False
+        self.num_groups = self.cfg["rewards"]["num_groups"]
+        self.num_obs = self.cfg["env"]["num_observations"] + self.num_groups
+        self._init_buffers()      
         self._prepare_reward_function()
-        self._weights_per_env = self._init_default_weights()  # np.ndarray, shape = (num_envs, num_groups)
+        self.weights_per_env = self._init_default_weights()  # np.ndarray, shape = (num_envs, num_groups)
 
     def _init_default_weights(self):
         """ init default weights for each env & each reward group """
-        num_envs = self.num_envs
-        num_groups = 6
-        w = np.ones((num_envs, num_groups), dtype=np.float32)
-        return w / w.sum(axis=1, keepdims=True)
+        balanced_w = torch.ones(self.num_groups, dtype=torch.float32, device=self.device)
+        self.center_w = torch.tensor(GROUP_SIZES, device=self.device)
+        
+        w_single = get_valid_single_weight(balanced_w, self.center_w)
+        
+        # w_single = torch.tensor([0.038, 0.192, 0.115, 0.231, 0.115, 0.308], dtype=torch.float32, device=self.device)
+
+        w = w_single.unsqueeze(0).expand(self.num_envs, -1)
+        return w
 
     def _create_envs(self):
         self.num_envs = self.cfg["env"]["num_envs"]
@@ -303,7 +312,6 @@ class T1(BaseTask):
             self.env_origins[:, 2] = self.terrain.terrain_heights(self.env_origins)
 
     def _init_buffers(self):
-        self.num_obs = self.cfg["env"]["num_observations"]
         self.num_privileged_obs = self.cfg["env"]["num_privileged_obs"]
         self.num_actions = self.cfg["env"]["num_actions"]
         self.dt = self.cfg["control"]["decimation"] * self.cfg["sim"]["dt"]
@@ -453,6 +461,8 @@ class T1(BaseTask):
                 self.default_dof_pos[:, i] = self.cfg["init_state"][
                     "default_joint_angles"
                 ]["default"]
+        
+        self._test_phase = torch.zeros(self.num_envs, dtype=torch.long, device=self.device) # 测试动作突变周期
 
     def _prepare_reward_function(self):  # TODO 1
         """Prepares a list of reward functions, which will be called to compute the total reward.
@@ -473,36 +483,74 @@ class T1(BaseTask):
             self.reward_names.append(name)
             name = "_reward_" + name  # consistent with pre-defined function names
             self.reward_functions.append(getattr(self, name))
+        # get group ids for each reward
+        self.group_ids = torch.tensor(
+            [REWARD_TO_GROUP[n] for n in self.reward_names],
+            device=self.device,
+            dtype=torch.long,
+        )
+        self.scales_tensor = torch.tensor(
+            [self.reward_scales[n] for n in self.reward_names],
+            device=self.device,
+            dtype=torch.float32,
+        )
+        self.group_scale_per_term = (GROUP_SCALE.to(self.device))[self.group_ids]
+        self.dirichlet_alpha = DIRICHLET_ALPHA.to(self.device)
+
 
     def reset(self):
         """Reset all robots"""
         env_ids = torch.arange(self.num_envs, device=self.device)
         self._reset_idx(env_ids)
         self._resample_commands()
-        # initial reset, intial weights sampling 
-        sampled_weights = self._resample_weights(env_ids)
-        print(f"==================================\ninitial reset successfully!\nenv_ids: {env_ids}, \nresampled_weights: {sampled_weights}\n==================================")
+        if not self.playmode:
+            # initial reset, intial weights sampling 
+            sampled_weights = self._resample_weights(env_ids)
+            print(f"======================================\n"
+                  f"Train Mode: successful initialization!\n"
+                  f"env_ids: {env_ids}, \n"
+                  f"initial weight: {sampled_weights}\n"
+                  f"======================================")
+        else:
+            # for play mode testing, you can choose the preset weights from utils/weights.py
+            # A_Speed_Demon, B_Stable_Walker, C_Energy_Saver, D_Contact_Aware, E_All_Rounder
+            # weights_preset = "A_Speed_Demon"
+            # w_single = get_weights(weights_preset).to(self.device)
+            # w_single = torch.tensor([0.038, 0.492, 0.115, 0.031, 0.115, 0.208], dtype=torch.float32) # 手动指定
+            # self.weights_per_env.copy_(w_single.unsqueeze(0).expand(self.num_envs, -1))
+            user_weight = torch.tensor([1, 5, 1, 1, 5, 1], dtype=torch.float32, device=self.device)
+            w_single = get_valid_single_weight(user_weight, self.center_w)
+            self.weights_per_env.copy_(w_single.unsqueeze(0).expand(self.num_envs, -1))
+
+            print(f"======================================\n"
+                  f"Play Mode: successful initialization!\n"
+                  f"user weight: {user_weight}\n"
+                  f"real weight: {self.weights_per_env}\n"
+                  f"======================================")
+            if self.random_play:
+                print("playing with random commands.")
+            else:
+                print("playing with designated commands.")
         self._compute_observations()
         return self.obs_buf, self.extras
 
+
     def _resample_weights(self, env_ids):
         """
-        Sample new reward weights for given environments.
-        Should be called *after* obs/rew collection for the current episode.
+        Dirichlet sampling for self.weights_per_env.
         """
-        sampled_w = sample_dirichlet_weights(len(env_ids), num_groups=6)  # shape: [len(env_ids), 6]
-        self._weights_per_env[env_ids.cpu().numpy()] = sampled_w
-        return sampled_w
+        if len(env_ids) == 0:
+            return torch.empty(0, 6, device=self.device)
+
+        dist = torch.distributions.Dirichlet(self.dirichlet_alpha)
+        new_w = dist.sample((len(env_ids),))
+        self.weights_per_env[env_ids] = new_w
+        return new_w
 
     def _reset_idx(self, env_ids):
         if len(env_ids) == 0:
             return
         
-        # # sample weights
-        # sampled_w = sample_dirichlet_weights(len(env_ids), num_groups=6)  # shape: [len(env_ids), 6]
-        # self._weights_per_env[env_ids.cpu().numpy()] = sampled_w
-
-
         self._update_curriculum(env_ids)
         self._reset_dofs(env_ids)
         self._reset_root_states(env_ids)
@@ -599,53 +647,101 @@ class T1(BaseTask):
             self._refresh_feet_state()
 
     def _resample_commands(self):
-        env_ids = (
-            (self.episode_length_buf == self.cmd_resample_time)
-            .nonzero(as_tuple=False)
-            .flatten()
-        )
-        if len(env_ids) == 0:
-            return
-        if self.cfg["commands"]["curriculum"]:
-            self._resample_curriculum_commands(env_ids)
-        else:
-            self.commands[env_ids, 0] = torch_rand_float(
-                self.cfg["commands"]["lin_vel_x"][0],
-                self.cfg["commands"]["lin_vel_x"][1],
+        if self.random_play:
+            
+            env_ids = (
+                (self.episode_length_buf == self.cmd_resample_time)
+                .nonzero(as_tuple=False)
+                .flatten()
+            )
+            if len(env_ids) == 0:
+                return
+            if self.cfg["commands"]["curriculum"]:
+                self._resample_curriculum_commands(env_ids)
+            else:
+                self.commands[env_ids, 0] = torch_rand_float( # sample the command for x-axis velocity
+                    self.cfg["commands"]["lin_vel_x"][0],
+                    self.cfg["commands"]["lin_vel_x"][1],
+                    (len(env_ids), 1),
+                    device=self.device,
+                ).squeeze(1)
+                self.commands[env_ids, 1] = torch_rand_float( # sample the command for y-axis velocity
+                    self.cfg["commands"]["lin_vel_y"][0],
+                    self.cfg["commands"]["lin_vel_y"][1],
+                    (len(env_ids), 1),
+                    device=self.device,
+                ).squeeze(1)
+                self.commands[env_ids, 2] = torch_rand_float( # sample the command for yaw velocity
+                    self.cfg["commands"]["ang_vel_yaw"][0],
+                    self.cfg["commands"]["ang_vel_yaw"][1],
+                    (len(env_ids), 1),
+                    device=self.device,
+                ).squeeze(1)
+            self.gait_frequency[env_ids] = torch_rand_float( # sample the command for gait frequency
+                self.cfg["commands"]["gait_frequency"][0],
+                self.cfg["commands"]["gait_frequency"][1],
                 (len(env_ids), 1),
                 device=self.device,
             ).squeeze(1)
-            self.commands[env_ids, 1] = torch_rand_float(
-                self.cfg["commands"]["lin_vel_y"][0],
-                self.cfg["commands"]["lin_vel_y"][1],
-                (len(env_ids), 1),
-                device=self.device,
-            ).squeeze(1)
-            self.commands[env_ids, 2] = torch_rand_float(
-                self.cfg["commands"]["ang_vel_yaw"][0],
-                self.cfg["commands"]["ang_vel_yaw"][1],
-                (len(env_ids), 1),
-                device=self.device,
-            ).squeeze(1)
-        self.gait_frequency[env_ids] = torch_rand_float(
-            self.cfg["commands"]["gait_frequency"][0],
-            self.cfg["commands"]["gait_frequency"][1],
-            (len(env_ids), 1),
-            device=self.device,
-        ).squeeze(1)
-        still_envs = env_ids[
-            torch.randperm(len(env_ids))[
-                : int(self.cfg["commands"]["still_proportion"] * len(env_ids))
+            still_envs = env_ids[
+                torch.randperm(len(env_ids))[
+                    : int(self.cfg["commands"]["still_proportion"] * len(env_ids))
+                ]
             ]
-        ]
-        self.commands[still_envs, :] = 0.0
-        self.gait_frequency[still_envs] = 0.0
-        self.cmd_resample_time[env_ids] += torch.randint(
-            int(self.cfg["commands"]["resampling_time_s"][0] / self.dt),
-            int(self.cfg["commands"]["resampling_time_s"][1] / self.dt),
-            (len(env_ids),),
-            device=self.device,
-        )
+            self.commands[still_envs, :] = 0.0
+            self.gait_frequency[still_envs] = 0.0
+            self.cmd_resample_time[env_ids] += torch.randint(
+                int(self.cfg["commands"]["resampling_time_s"][0] / self.dt),
+                int(self.cfg["commands"]["resampling_time_s"][1] / self.dt),
+                (len(env_ids),),
+                device=self.device,
+            )
+        else: # 指定测试命令
+            
+            env_ids = (
+                (self.episode_length_buf == self.cmd_resample_time)
+                .nonzero(as_tuple=False)
+                .flatten()
+            )
+            if len(env_ids) == 0:
+                return
+            
+            # 四阶段动作
+            max_vx = self.cfg["commands"]["lin_vel_x"][1]
+            max_vy = self.cfg["commands"]["lin_vel_y"][1]
+            max_wz = self.cfg["commands"]["ang_vel_yaw"][1]
+            max_f  = self.cfg["commands"]["gait_frequency"][1]
+
+            command_table = torch.tensor(
+                [
+                    [ +1.5 * max_vx,  0.0,          0.0,           0.8 * max_f ], # 快速前进
+                    [ -2.0 * max_vx,  0.0,          0.0,           1.0 * max_f ], # 急停反向
+                    [  0.0,          +0.8 * max_vy, -max_wz,        0.8 * max_f ], # 侧移 + 顺时针
+                    [  0.0,          -0.8 * max_vy, 1.5*max_wz,       1.0 * max_f ], # 反向侧移 + 逆时针
+                ],
+                dtype=torch.float32,
+                device=self.device,
+            )
+
+            phase_idx = self._test_phase[env_ids]
+            cmds= command_table[phase_idx]
+
+            self.commands[env_ids, 0] = cmds[:, 0]
+            self.commands[env_ids, 1] = cmds[:, 1]
+            self.commands[env_ids, 2] = cmds[:, 2]
+            self.gait_frequency[env_ids] = cmds[:, 3]
+
+            # 更新阶段
+            self._test_phase[env_ids] = (phase_idx + 1) % command_table.shape[0]
+
+            # 设定下一次重采样步数
+            # 沿用 cfg 中的 [min, max] 区间随机, 保留周期节奏感
+            self.cmd_resample_time[env_ids] += torch.randint(
+                int(self.cfg["commands"]["resampling_time_s"][0] / self.dt),
+                int(self.cfg["commands"]["resampling_time_s"][1] / self.dt),
+                (len(env_ids),),
+                device=self.device,
+            )
 
     def _update_curriculum(self, env_ids):
         if not self.cfg["commands"]["curriculum"]:
@@ -811,20 +907,16 @@ class T1(BaseTask):
         self._kick_robots()
         self._push_robots()
         self._check_termination()
-        # self._compute_reward()
-        #TODO 4
-        self._compute_reward_moppo(self._weights_per_env) #
+        self._compute_reward_moppo()
 
         env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
-        # if len(env_ids) > 0: # for debug
-        #     print(f"episode reset env_ids: {env_ids}, reset_buf is {self.reset_buf}")
 
         self._reset_idx(env_ids)
         self._teleport_robot()
         self._resample_commands()
 
-        resampled_weights = self._resample_weights(env_ids) # resample weights for MOPPO
-        # print(f"env_ids: {env_ids}, step() recalled, resampled weights is {resampled_weights}, current weights is {self._weights_per_env}")
+        if not self.playmode:
+            self._resample_weights(env_ids) # resample weights for MOPPO
 
         self._compute_observations()
  
@@ -941,8 +1033,6 @@ class T1(BaseTask):
         self.reset_buf |= self.time_out_buf
         self.time_out_buf |= self.episode_length_buf == self.cmd_resample_time
 
-
-
     def _compute_reward(self):  # TODO 2
         """Compute rewards
         Calls each reward function which had a non-zero scale (processed in self._prepare_reward_function())
@@ -956,58 +1046,26 @@ class T1(BaseTask):
             self.extras["rew_terms"][name] = rew
         if self.cfg["rewards"]["only_positive_rewards"]:
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.0)
-    
-    def _compute_reward_moppo(self, weights: np.ndarray): #TODO
+
+    @torch.no_grad()
+    def _compute_reward_moppo(self):
         """
-        weights: np.ndarray of shape [num_envs, num_groups]
+        Vectorised reward =  (all_terms ⊙ weights_per_term).sum(dim=1)
         """
-        self.rew_buf[:] = 0.0
+        all_terms = torch.stack(
+            [fn() for fn in self.reward_functions],
+            dim=1,
+        )
+        all_terms = all_terms * self.scales_tensor
+        weights_per_term = (self.weights_per_env * GROUP_SCALE.to(self.device))[:, self.group_ids]
+        weighted_terms = all_terms * weights_per_term
+        self.rew_buf[:] = weighted_terms.sum(dim=1)
 
-        # Initialize rew_terms dictionary for each reward name
-        if "rew_terms" not in self.extras:
-            self.extras["rew_terms"] = {}
-        for name in self.reward_names:
-            if name not in self.extras["rew_terms"]:
-                self.extras["rew_terms"][name] = torch.zeros(self.num_envs, device=self.device)
-        
-        for env_id in range(self.num_envs):
-            w = weights[env_id]
-            for i in range(len(self.reward_functions)):
-                name = self.reward_names[i] # name is name itself, not function name with _reward_ as prefix
-                group_id = REWARD_TO_GROUP[name]
-                rew = (
-                    self.reward_functions[i]()[env_id]
-                    * self.reward_scales[name]
-                    * w[group_id]
-                )
-                self.rew_buf[env_id] += rew
-                # print(f"self.rew_buf[env_id] += {rew}")
-                self.extras["rew_terms"][name][env_id] = rew
-                # print(f"this test success") 
+        for idx, name in enumerate(self.reward_names):
+            self.extras["rew_terms"][name] = weighted_terms[:, idx]
+
         if self.cfg["rewards"]["only_positive_rewards"]:
-            self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.0)
-
-    def _compute_reward_moppo_single(self, sampled_weights):  # TODO 3
-        """compute reward for moppo"""
-        # weights[0:6]
-        self.rew_buf[:] = 0.0
-        for i in range(len(self.reward_functions)):
-            name = self.reward_names[i]
-
-            # 临时测试用
-            tmp_weights = list([0.2, 0.2, 0.2, 0.2, 0.1, 0.1])
-            sampled_weights = tmp_weights
-            reward_group_id = REWARD_TO_GROUP[name]
-
-            rew = (
-                self.reward_functions[i]()
-                * self.reward_scales[name]
-                * sampled_weights[reward_group_id]
-            )
-            self.rew_buf += rew
-            self.extras["rew_terms"][name] = rew
-        if self.cfg["rewards"]["only_positive_rewards"]:
-            self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.0)
+            self.rew_buf.clamp_(min=0.0)
 
     def _compute_observations(self):
         """Computes observations"""
@@ -1048,11 +1106,8 @@ class T1(BaseTask):
             dim=-1,
         )
 
-        weights_tensor = torch.tensor(self._weights_per_env, device=self.device).float()
-        self.obs_buf = torch.cat((original_obs, weights_tensor), dim=-1)
-        # print(f"current weights_tensor: {weights_tensor}")
-        # print("_compute_observations() recalled, weights concatenated in obs vec.")
-
+        # add weights to obs
+        self.obs_buf = torch.cat((original_obs, self.weights_per_env), dim=-1)
 
         self.privileged_obs_buf = torch.cat(
             (

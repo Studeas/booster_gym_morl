@@ -1,9 +1,9 @@
 basic:
-  checkpoint: null # set to -1 to load last saved model
+  checkpoint: null #null # set to -1 to load last saved model
   headless: false  # 设置为false以启用图形界面
-  max_iterations: 10000 # set the maximum number of learning iterations to train for
-  sim_device: "cuda:0" # device for physics simulation
-  rl_device: "cuda:0" # device for the RL algorithm
+  max_iterations: 5000 # set the maximum number of learning iterations to train for
+  sim_device: "cuda:2" # device for physics simulation
+  rl_device: "cuda:2" # device for the RL algorithm
   seed: 42 # seed - set to -1 to choose random seed
   description: ""
   # task: T1
@@ -29,11 +29,15 @@ viewer:
   record_env_idx: 0
 
 algorithm:
-  learning_rate: 1.e-5
+  learning_rate: 1.e-6 #1.e-5
   gamma: 0.995
   lam: 0.95
   bound_coef: 1.0
-  entropy_coef: -0.01
+
+  entropy_coef_start: -0.005 # initial -0.01
+  entropy_coef_end: -0.001 # final -0.001
+  entropy_coef_decay_iters: 3000
+
   symmetric_coef: 10.
   desired_kl: 0.01
 
@@ -119,7 +123,7 @@ commands:
   lin_vel_x: [-1.0, 1.0] # min max [m/s]
   lin_vel_y: [-1.0, 1.0] # min max [m/s]
   ang_vel_yaw: [-1, 1]   # min max [rad/s]
-  resampling_time_s: [8., 12.]
+  resampling_time_s: [6., 8.] #[8., 12.]
   gait_frequency: [1.0, 2.0] # min max [Hz]
   # curriculum only:
   curriculum: false
@@ -250,14 +254,15 @@ randomization:
     distribution: "uniform"
 
 rewards:
+  num_groups: 6
   scales:
     # 1. survival
-    survival: 0.25
+    survival: 0.25 #0.25
 
     # 2. velocity_tracking
-    tracking_lin_vel_x: 1.0
-    tracking_lin_vel_y: 1.0
-    tracking_ang_vel: 0.5
+    tracking_lin_vel_x: 1.0 #1.0
+    tracking_lin_vel_y: 1.0 #1.0
+    tracking_ang_vel: 0.5 #0.5
     lin_vel_z: -2.
     ang_vel_xy: -0.2
 

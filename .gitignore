@@ -1,7 +1,13 @@
 logs/
-
+videos/
 swanlog/
+dirichlet/
 
 init_env.sh
+T1_base.yaml
+training_start.sh
+play_with_weights.sh
+add_morl_framework.md
 
 .vscode/
+
